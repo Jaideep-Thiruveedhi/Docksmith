@@ -1,0 +1,176 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum RepositoryStatus {
+  PENDING
+  SYNCING
+  READY
+  ERROR
+}
+
+enum CodeUnitType {
+  FUNCTION
+  CLASS
+  METHOD
+  MODULE
+}
+
+enum DocumentationStatus {
+  PUBLISHED
+  DRAFT
+}
+
+enum StalenessStatus {
+  OK
+  REVIEW_RECOMMENDED
+  POTENTIALLY_OUTDATED
+  BROKEN
+}
+
+enum ChatRole {
+  SYSTEM
+  USER
+  ASSISTANT
+}
+
+model Repository {
+  id             String           @id @default(cuid())
+  url            String
+  owner          String
+  name           String
+  defaultBranch  String           @default("main")
+  trackedBranch  String           @default("main")
+  lastSyncedSha  String?          @db.VarChar(64)
+  status         RepositoryStatus @default(PENDING)
+  syncStartedAt  DateTime?         @db.Timestamptz(3)
+  lastSyncedAt   DateTime?         @db.Timestamptz(3)
+  syncError      String?          @db.Text
+  createdAt      DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime         @updatedAt @db.Timestamptz(3)
+  files          File[]
+  commits        Commit[]
+  chatSessions   ChatSession[]
+
+  @@unique([owner, name, trackedBranch])
+  @@index([status, updatedAt])
+}
+
+model File {
+  id         String     @id @default(cuid())
+  path       String
+  language   String
+  sha        String     @db.VarChar(64)
+  repoId     String
+  repo       Repository @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  deletedAt  DateTime?  @db.Timestamptz(3)
+  createdAt  DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime   @updatedAt @db.Timestamptz(3)
+  codeUnits  CodeUnit[]
+
+  @@unique([repoId, path])
+  @@index([repoId, language])
+}
+
+model CodeUnit {
+  id            String          @id @default(cuid())
+  key           String
+  type          CodeUnitType
+  name          String
+  signature     String          @db.Text
+  body          String          @db.Text
+  startLine     Int
+  endLine       Int
+  signatureHash String          @db.VarChar(64)
+  bodyHash      String          @db.VarChar(64)
+  fileId        String
+  file          File            @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  deletedAt     DateTime?        @db.Timestamptz(3)
+  createdAt     DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime         @updatedAt @db.Timestamptz(3)
+  documentation Documentation[]
+  stalenessFlag StalenessFlag?
+
+  @@unique([fileId, key])
+  @@index([fileId, type])
+  @@index([name])
+}
+
+model Documentation {
+  id                  String              @id @default(cuid())
+  codeUnitId          String
+  codeUnit            CodeUnit            @relation(fields: [codeUnitId], references: [id], onDelete: Cascade)
+  markdown            String              @db.Text
+  version             Int                 @default(1)
+  status              DocumentationStatus @default(DRAFT)
+  sourceSignatureHash String              @db.VarChar(64)
+  sourceBodyHash      String              @db.VarChar(64)
+  supersededAt        DateTime?           @db.Timestamptz(3)
+  indexedAt           DateTime?           @db.Timestamptz(3)
+  indexError          String?             @db.Text
+  createdAt           DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime            @updatedAt @db.Timestamptz(3)
+
+  @@unique([codeUnitId, version])
+  @@index([status, supersededAt, createdAt])
+}
+
+model Commit {
+  id        String     @id @default(cuid())
+  sha       String     @db.VarChar(64)
+  message   String     @db.Text
+  author    String
+  date      DateTime   @db.Timestamptz(3)
+  repoId    String
+  repo      Repository @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  createdAt DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime   @updatedAt @db.Timestamptz(3)
+
+  @@unique([repoId, sha])
+  @@index([repoId, date])
+}
+
+model StalenessFlag {
+  id         String          @id @default(cuid())
+  codeUnitId String          @unique
+  codeUnit   CodeUnit        @relation(fields: [codeUnitId], references: [id], onDelete: Cascade)
+  status     StalenessStatus @default(OK)
+  reason     String?         @db.Text
+  // Provenance only: the commit can be outside the ingested history (e.g. force pushes).
+  commitSha  String?         @db.VarChar(64)
+  createdAt  DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime        @updatedAt @db.Timestamptz(3)
+
+  @@index([status, updatedAt])
+  @@index([commitSha])
+}
+
+model ChatSession {
+  id        String        @id @default(cuid())
+  repoId    String
+  repo      Repository    @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  title     String
+  createdAt DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime      @updatedAt @db.Timestamptz(3)
+  messages  ChatMessage[]
+
+  @@index([repoId, updatedAt])
+}
+
+model ChatMessage {
+  id        String      @id @default(cuid())
+  sessionId String
+  session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role      ChatRole
+  content   String      @db.Text
+  sources   Json        @default("[]")
+  createdAt DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime    @updatedAt @db.Timestamptz(3)
+
+  @@index([sessionId, createdAt, id])
+}
